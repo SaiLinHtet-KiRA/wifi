@@ -3,11 +3,18 @@ import { WifiSample } from "@/types/WifiSample";
 type Props = {
   sample: WifiSample[];
   count: number;
+  address?: string;
   onSelect: (bssid: string) => void;
   onBack: () => void;
 };
 
-export default function PopuModel({ sample, count, onSelect, onBack }: Props) {
+function bandColor(band: string): string {
+  if (band === "6 GHz") return "#fb2c36";
+  if (band === "5 GHz") return "#efb100";
+  return "#00c850";
+}
+
+export default function PopuModel({ sample, count, address, onSelect, onBack }: Props) {
   if (!sample.length) {
     return (
       <div className="rounded-3xl border border-slate-200 bg-white/95 p-5 shadow-sm backdrop-blur-md">
@@ -49,7 +56,10 @@ export default function PopuModel({ sample, count, onSelect, onBack }: Props) {
             >
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-slate-900 truncate">{s.ssid || s.bssid}</p>
-                <span className="shrink-0 text-[10px] uppercase tracking-widest text-slate-500">{s.band}</span>
+                <span className="shrink-0 flex items-center gap-1 text-[10px] uppercase tracking-widest text-slate-500">
+                  <span className="h-2 w-2 rounded-full opacity-80" style={{ backgroundColor: bandColor(s.band) }} />
+                  {s.band}
+                </span>
               </div>
               <p className="mt-0.5 text-xs text-slate-500 truncate">{s.bssid}</p>
               <div className="mt-1.5 flex gap-1.5 text-[10px] text-slate-500">
@@ -83,26 +93,23 @@ export default function PopuModel({ sample, count, onSelect, onBack }: Props) {
           <div className="min-w-0">
             <p className="text-[10px] uppercase tracking-widest text-sky-600">Sample overview</p>
             <h2 className="text-sm font-semibold text-slate-900 truncate">
-              {selectedSample.ssid || selectedSample.bssid}
+              {selectedSample.ssid}
             </h2>
           </div>
         </div>
-        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-slate-700">
+        <span className="shrink-0 flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-slate-700">
+          <span className="h-2 w-2 rounded-full opacity-80" style={{ backgroundColor: bandColor(selectedSample.band) }} />
           {selectedSample.band}
         </span>
       </div>
 
       {/* scrollable body */}
       <div className="overflow-y-auto px-4 pb-4 pt-3 space-y-3">
-        {/* main fields — 3 col compact grid */}
+        {/* main fields */}
         <div className="grid grid-cols-3 gap-1.5">
           {[
-            ["RSSI", `${selectedSample.rssi_dbm} dBm`],
-            ["Channel", String(selectedSample.channel)],
             ["Freq", `${selectedSample.frequency_mhz} MHz`],
-            ["Count", String(selectedSample.wifi_count)],
             ["Merged", String(selectedSample.merged_count)],
-            ["Standard", selectedSample.wifi_standard],
           ].map(([label, value]) => (
             <div key={label} className="rounded-xl bg-slate-50 px-2.5 py-2">
               <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
@@ -111,16 +118,13 @@ export default function PopuModel({ sample, count, onSelect, onBack }: Props) {
           ))}
         </div>
 
-        {/* wide fields — full width */}
+        {/* wide fields */}
         <div className="space-y-1.5">
           {[
+            ["Name", selectedSample.ssid],
             ["BSSID", selectedSample.bssid],
-            ["SSID", selectedSample.ssid],
             ["Security", selectedSample.security],
-            ["Username", selectedSample.username],
-            ["Captured at", selectedSample.captured_at],
-            ["Sample ID", selectedSample.sample_id],
-            ["Collection", selectedSample.collection_id],
+            ["Address", address ?? ""],
           ].map(([label, value]) => (
             <div key={label} className="flex items-baseline gap-2 rounded-xl bg-slate-50 px-2.5 py-1.5">
               <span className="shrink-0 text-[9px] font-semibold uppercase tracking-widest text-slate-400 w-16">{label}</span>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Map as MapGL } from "react-map-gl/maplibre";
 import type { MapRef } from "react-map-gl/maplibre";
 import { MapboxOverlay } from "@deck.gl/mapbox";
@@ -16,6 +16,20 @@ type Cluster = {
   address: string;
 };
 
+type BandLabel = "2.4 GHz" | "5 GHz" | "6 GHz";
+
+const BANDS: { label: BandLabel; color: string }[] = [
+  { label: "2.4 GHz", color: "#00c850" },
+  { label: "5 GHz", color: "#efb100" },
+  { label: "6 GHz", color: "#fb2c36" },
+];
+
+function getBandLabel(mhz: number): BandLabel {
+  if (mhz >= 5925) return "6 GHz";
+  if (mhz >= 5150) return "5 GHz";
+  return "2.4 GHz";
+}
+
 const supercluster = new Supercluster({ radius: 60, maxZoom: 20 });
 
 // Cache to avoid re-fetching the same coordinates
@@ -25,14 +39,20 @@ async function fetchAddress(lat: number, lng: number): Promise<string> {
   const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
   if (addressCache.has(key)) return addressCache.get(key)!;
   try {
+    throw new Error("Simulated error to test fallback"); // --- IGNORE ---
     const res = await fetch(
       `https://nominatim.openstreetmap.org/reverse?format=json&accept-language=en&lat=${lat}&lon=${lng}`,
+      {
+        headers: {
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+      },
     );
     const json = await res.json();
     const a = json.address ?? {};
-    // Build a short readable address: road/amenity, suburb/district, city
     const parts = [
-      a.road ?? a.pedestrian ?? a.amenity ?? a.building,
+      a.building ?? a.amenity,
+      a.road ?? a.pedestrian,
       a.suburb ?? a.neighbourhood ?? a.quarter,
       a.city ?? a.town ?? a.village ?? a.county,
     ].filter(Boolean);
@@ -45,35 +65,33 @@ async function fetchAddress(lat: number, lng: number): Promise<string> {
     return key;
   }
 }
+
 // Max real-world outdoor range in metres by band + standard
 function getWifiRange(sample: WifiSample): number {
   const std = sample.wifi_standard?.toLowerCase() ?? "";
   const band = sample.band;
 
-  // Wi-Fi 6E (802.11ax on 6 GHz) — shortest range
   if (band === "6 GHz") return 90;
 
-  // 5 GHz
   if (band === "5 GHz") {
     if (std.includes("ax") || std.includes("wifi 6")) return 150;
     if (std.includes("ac") || std.includes("wifi 5")) return 100;
     if (std.includes("n") || std.includes("wifi 4")) return 120;
-    return 100; // default 5 GHz
+    return 100;
   }
 
-  // 2.4 GHz (default)
   if (std.includes("ax") || std.includes("wifi 6")) return 300;
   if (std.includes("n") || std.includes("wifi 4")) return 250;
   if (std.includes("g")) return 150;
   if (std.includes("b")) return 100;
-  return 150; // default 2.4 GHz
+  return 150;
 }
 
 // Color by frequency band (MHz)
 function getFreqColor(mhz: number): [number, number, number, number] {
-  if (mhz >= 5925) return [180, 0, 255, 200]; // 6 GHz — purple
-  if (mhz >= 5150) return [0, 120, 255, 200]; // 5 GHz — blue
-  return [0, 200, 80, 200]; // 2.4 GHz — green
+  if (mhz >= 5925) return [251, 44, 54, 150];
+  if (mhz >= 5150) return [239, 177, 0, 150];
+  return [0, 200, 80, 200];
 }
 
 export default function MapComponent({ data }: { data: WifiSample[] }) {
@@ -88,12 +106,32 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [selectedCluster, setSelectedCluster] = useState<Cluster | null>(null);
   const [selectedBssid, setSelectedBssid] = useState<string | null>(null);
+  const [activeBands, setActiveBands] = useState<Set<BandLabel>>(
+    new Set(["2.4 GHz", "5 GHz", "6 GHz"]),
+  );
 
-  // Load WifiSample[] into supercluster whenever data changes
+  const filteredData = useMemo(
+    () => data.filter((s) => activeBands.has(getBandLabel(s.frequency_mhz))),
+    [data, activeBands],
+  );
+
+  function toggleBand(band: BandLabel) {
+    setActiveBands((prev) => {
+      if (prev.has(band) && prev.size === 1) return prev; // keep at least one
+      const next = new Set(prev);
+      next.has(band) ? next.delete(band) : next.add(band);
+      return next;
+    });
+  }
+
+  // Load filteredData into supercluster whenever it changes
   useEffect(() => {
-    if (data.length === 0) return;
+    if (filteredData.length === 0) {
+      setClusters([]);
+      return;
+    }
     supercluster.load(
-      data.map((p, id) => ({
+      filteredData.map((p, id) => ({
         type: "Feature" as const,
         geometry: {
           type: "Point" as const,
@@ -102,28 +140,27 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
         properties: { id },
       })),
     );
-  }, [data]);
-  console.log(`Zoom ${viewState.zoom.toFixed(2)}: ${clusters.length} clusters`);
-  console.log(clusters);
+  }, [filteredData]);
+
   // Recompute clusters + fetch address for each center on pan / zoom
   useEffect(() => {
-    if (data.length === 0) return;
+    if (filteredData.length === 0) return;
     let cancelled = false;
 
-    const bboxSize = Math.max(0.1, 1 / Math.pow(2, viewState.zoom - 10));
-    const bbox = [
-      viewState.longitude - bboxSize,
-      viewState.latitude - bboxSize,
-      viewState.longitude + bboxSize,
-      viewState.latitude + bboxSize,
-    ] as [number, number, number, number];
+    const timer = setTimeout(async () => {
+      const bboxSize = Math.max(0.1, 1 / Math.pow(2, viewState.zoom - 10));
+      const bbox = [
+        viewState.longitude - bboxSize,
+        viewState.latitude - bboxSize,
+        viewState.longitude + bboxSize,
+        viewState.latitude + bboxSize,
+      ] as [number, number, number, number];
 
-    const raw = supercluster.getClusters(
-      bbox,
-      Math.floor(viewState.zoom >= 20.5 ? 20.5 : Math.floor(viewState.zoom)),
-    );
+      const raw = supercluster.getClusters(
+        bbox,
+        Math.floor(viewState.zoom >= 20.5 ? 20.5 : Math.floor(viewState.zoom)),
+      );
 
-    (async () => {
       const transformed: Cluster[] = await Promise.all(
         raw.map(async (c) => {
           let clusterData: WifiSample[];
@@ -132,9 +169,11 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
               c.properties.cluster_id,
               Infinity,
             );
-            clusterData = leaves.map((leaf) => data[leaf.properties.id]);
+            clusterData = leaves.map(
+              (leaf) => filteredData[leaf.properties.id],
+            );
           } else {
-            clusterData = [data[c.properties.id]];
+            clusterData = [filteredData[c.properties.id]];
           }
           const [lng, lat] = c.geometry.coordinates;
           const address = await fetchAddress(lat, lng);
@@ -146,12 +185,13 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
         }),
       );
       if (!cancelled) setClusters(transformed);
-    })();
+    }, 500);
 
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [viewState, data]);
+  }, [viewState, filteredData]);
 
   const createLayers = (clusters: Cluster[]) => [
     new ScatterplotLayer({
@@ -163,13 +203,11 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
       radiusMaxPixels: 80,
       getRadius: (d: Cluster) => {
         if (d.data.length > 1) {
-          // Cluster: use the max range among its members
           return Math.max(...d.data.map(getWifiRange));
         }
         return getWifiRange(d.data[0]);
       },
       getFillColor: (d: Cluster) => {
-        // Find most frequent frequency_mhz among all points in this cluster
         const freq: Record<number, number> = {};
         for (const s of d.data)
           freq[s.frequency_mhz] = (freq[s.frequency_mhz] ?? 0) + 1;
@@ -241,53 +279,48 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
         }}
       />
 
-      {/* color legend */}
+      {/* frequency band filter legend */}
       <div className="absolute bottom-6 left-4 z-10 rounded-2xl border border-slate-200 bg-white/90 px-3 py-2.5 shadow-sm backdrop-blur-sm">
         <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-widest text-slate-400">
           Frequency band
         </p>
         <div className="space-y-1.5">
-          {(
-            [
-              { color: "#00c850", label: "2.4 GHz" },
-              { color: "#0078ff", label: "5 GHz" },
-              { color: "#b400ff", label: "6 GHz" },
-            ] as const
-          ).map(({ color, label }) => (
-            <div key={label} className="flex items-center gap-2">
-              <span
-                className="h-3 w-3 rounded-full opacity-80"
-                style={{ backgroundColor: color }}
-              />
-              <span className="text-xs text-slate-700">{label}</span>
-            </div>
-          ))}
+          {BANDS.map(({ label, color }) => {
+            const active = activeBands.has(label);
+            return (
+              <button
+                key={label}
+                type="button"
+                onClick={() => toggleBand(label)}
+                className={`flex w-full items-center gap-2 rounded-lg px-1 py-0.5 transition-opacity ${
+                  active ? "opacity-100" : "opacity-35"
+                }`}
+              >
+                <span
+                  className="h-3 w-3 shrink-0 rounded-full"
+                  style={{ backgroundColor: active ? color : "#94a3b8" }}
+                />
+                <span className="text-xs text-slate-700">{label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {selectedCluster && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-          onClick={() => {
-            setSelectedCluster(null);
-            setSelectedBssid(null);
-          }}
-        >
-          <div
-            className="relative w-full max-w-sm mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="absolute top-4 right-4 z-50 w-80">
+          <div className="relative">
             <button
               type="button"
               onClick={() => {
                 setSelectedCluster(null);
                 setSelectedBssid(null);
               }}
-              className="absolute -top-3 -right-3 z-10 rounded-full bg-white p-1.5 shadow-md text-slate-500 hover:text-slate-800"
+              className="absolute -top-2 -right-2 z-10 rounded-full bg-white p-1 shadow-md text-slate-500 hover:text-slate-800"
               aria-label="Close"
             >
               <svg
-                className="h-4 w-4"
+                className="h-3.5 w-3.5"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -303,6 +336,7 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
             <PopuModel
               sample={modalSamples}
               count={data.length}
+              address={selectedCluster.address}
               onSelect={(bssid) => setSelectedBssid(bssid)}
               onBack={() => setSelectedBssid(null)}
             />
