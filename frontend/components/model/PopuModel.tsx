@@ -1,5 +1,14 @@
 import { WifiSample } from "@/types/WifiSample";
 
+function formatAddress(address: string): string {
+  if (!address) return "";
+  return address
+    .replace(/-/g, ",")
+    .split(",")
+    .map((word) => word.trim().charAt(0).toUpperCase() + word.trim().slice(1).toLowerCase())
+    .join(",");
+}
+
 type Props = {
   sample: WifiSample[];
   count: number;
@@ -124,7 +133,7 @@ export default function PopuModel({ sample, count, address, onSelect, onBack }: 
             ["Name", selectedSample.ssid],
             ["BSSID", selectedSample.bssid],
             ["Security", selectedSample.security],
-            ["Address", address ?? ""],
+            ["Address", formatAddress(selectedSample.address ?? address ?? "")],
           ].map(([label, value]) => (
             <div key={label} className="flex items-baseline gap-2 rounded-xl bg-slate-50 px-2.5 py-1.5">
               <span className="shrink-0 text-[9px] font-semibold uppercase tracking-widest text-slate-400 w-16">{label}</span>

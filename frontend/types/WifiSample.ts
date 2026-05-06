@@ -20,4 +20,5 @@ export type WifiSample = {
   username: string;
   wifi_count: number;
   wifi_standard: string;
+  address:string
 };

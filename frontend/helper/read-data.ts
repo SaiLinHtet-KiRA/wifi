@@ -43,8 +43,8 @@ const parseGps = (gpsText: string) => {
 
 export type CsvRow = Record<string, any>;
 
-export async function readSet1Csv(): Promise<any> {
-  const csvPath = path.join(process.cwd(), "data", "set-1.csv");
+export async function readData(): Promise<any> {
+  const csvPath = path.join(process.cwd(), "data", "result.csv");
   const raw = await fs.readFile(csvPath, "utf8");
   const lines = raw.trim().split(/\r?\n/).filter(Boolean);
 

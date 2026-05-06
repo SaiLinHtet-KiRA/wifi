@@ -10,6 +10,15 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { WifiSample } from "@/types/WifiSample";
 import PopuModel from "@/components/model/PopuModel";
 
+function formatAddress(address: string): string {
+  if (!address) return "";
+  return address
+    .replace(/-/g, ",")
+    .split(",")
+    .map((word) => word.trim().charAt(0).toUpperCase() + word.trim().slice(1).toLowerCase())
+    .join(",");
+}
+
 type Cluster = {
   coordinates: [number, number];
   data: WifiSample[];
@@ -32,40 +41,6 @@ function getBandLabel(mhz: number): BandLabel {
 
 const supercluster = new Supercluster({ radius: 60, maxZoom: 20 });
 
-// Cache to avoid re-fetching the same coordinates
-const addressCache = new Map<string, string>();
-
-async function fetchAddress(lat: number, lng: number): Promise<string> {
-  const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
-  if (addressCache.has(key)) return addressCache.get(key)!;
-  try {
-    throw new Error("Simulated error to test fallback"); // --- IGNORE ---
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&accept-language=en&lat=${lat}&lon=${lng}`,
-      {
-        headers: {
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-      },
-    );
-    const json = await res.json();
-    const a = json.address ?? {};
-    const parts = [
-      a.building ?? a.amenity,
-      a.road ?? a.pedestrian,
-      a.suburb ?? a.neighbourhood ?? a.quarter,
-      a.city ?? a.town ?? a.village ?? a.county,
-    ].filter(Boolean);
-    const addr: string =
-      parts.length > 0 ? parts.join(", ") : (json.display_name ?? key);
-    addressCache.set(key, addr);
-    return addr;
-  } catch {
-    addressCache.set(key, key);
-    return key;
-  }
-}
-
 // Max real-world outdoor range in metres by band + standard
 function getWifiRange(sample: WifiSample): number {
   const std = sample.wifi_standard?.toLowerCase() ?? "";
@@ -85,6 +60,26 @@ function getWifiRange(sample: WifiSample): number {
   if (std.includes("g")) return 150;
   if (std.includes("b")) return 100;
   return 150;
+}
+
+function mergeAddresses(samples: WifiSample[]): string {
+  const addresses = samples
+    .map((s) => s.address)
+    .filter(Boolean);
+  if (addresses.length === 0) return "";
+  if (addresses.length === 1) return addresses[0];
+
+  const parts = addresses[0].split(" - ").map((p) => p.trim().toLowerCase());
+  const merged = parts
+    .map((part, idx) => {
+      const matches = addresses.filter((a) =>
+        a.split(" - ")[idx]?.toLowerCase().includes(part),
+      );
+      return matches.length === addresses.length ? parts[idx] : null;
+    })
+    .filter(Boolean);
+
+  return merged.length > 0 ? merged.join(" - ") : addresses[0];
 }
 
 // Color by frequency band (MHz)
@@ -109,6 +104,7 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
   const [activeBands, setActiveBands] = useState<Set<BandLabel>>(
     new Set(["2.4 GHz", "5 GHz", "6 GHz"]),
   );
+  const [clusterVersion, setClusterVersion] = useState(0);
 
   const filteredData = useMemo(
     () => data.filter((s) => activeBands.has(getBandLabel(s.frequency_mhz))),
@@ -128,6 +124,7 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
   useEffect(() => {
     if (filteredData.length === 0) {
       setClusters([]);
+      setClusterVersion((v) => v + 1);
       return;
     }
     supercluster.load(
@@ -140,14 +137,15 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
         properties: { id },
       })),
     );
+    setClusterVersion((v) => v + 1);
   }, [filteredData]);
 
-  // Recompute clusters + fetch address for each center on pan / zoom
+  // Recompute clusters on pan / zoom
   useEffect(() => {
     if (filteredData.length === 0) return;
     let cancelled = false;
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       const bboxSize = Math.max(0.1, 1 / Math.pow(2, viewState.zoom - 10));
       const bbox = [
         viewState.longitude - bboxSize,
@@ -156,34 +154,34 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
         viewState.latitude + bboxSize,
       ] as [number, number, number, number];
 
-      const raw = supercluster.getClusters(
-        bbox,
-        Math.floor(viewState.zoom >= 20.5 ? 20.5 : Math.floor(viewState.zoom)),
-      );
+      const zoom = Math.min(20, Math.floor(viewState.zoom));
+      const raw = supercluster.getClusters(bbox, zoom);
 
-      const transformed: Cluster[] = await Promise.all(
-        raw.map(async (c) => {
-          let clusterData: WifiSample[];
-          if (c.properties.cluster) {
-            const leaves = supercluster.getLeaves(
-              c.properties.cluster_id,
-              Infinity,
-            );
-            clusterData = leaves.map(
-              (leaf) => filteredData[leaf.properties.id],
-            );
-          } else {
-            clusterData = [filteredData[c.properties.id]];
-          }
-          const [lng, lat] = c.geometry.coordinates;
-          const address = await fetchAddress(lat, lng);
-          return {
-            coordinates: c.geometry.coordinates as [number, number],
-            data: clusterData,
-            address,
-          };
-        }),
-      );
+      if (raw.length === 0) {
+        if (!cancelled) setClusters([]);
+        return;
+      }
+
+      const transformed: Cluster[] = raw.map((c) => {
+        let clusterData: WifiSample[];
+        if (c.properties.cluster) {
+          const leaves = supercluster.getLeaves(
+            c.properties.cluster_id,
+            Infinity,
+          );
+          clusterData = leaves.map(
+            (leaf) => filteredData[leaf.properties.id],
+          );
+        } else {
+          clusterData = [filteredData[c.properties.id]];
+        }
+        const address = formatAddress(mergeAddresses(clusterData));
+        return {
+          coordinates: c.geometry.coordinates as [number, number],
+          data: clusterData,
+          address,
+        };
+      });
       if (!cancelled) setClusters(transformed);
     }, 500);
 
@@ -191,7 +189,7 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [viewState, filteredData]);
+  }, [viewState, clusterVersion]);
 
   const createLayers = (clusters: Cluster[]) => [
     new ScatterplotLayer({
@@ -235,7 +233,7 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
       id: "labels",
       data: clusters,
       getPosition: (d) => [d.coordinates[0], d.coordinates[1], 0],
-      getText: (d: Cluster) => d.address,
+      getText: (d: Cluster) => d.address || "",
       getColor: [0, 0, 0, 220],
       getSize: 11,
       getTextAnchor: "middle",
