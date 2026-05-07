@@ -89,7 +89,7 @@ function getFreqColor(mhz: number): [number, number, number, number] {
   return [0, 200, 80, 200];
 }
 
-export default function MapComponent({ data }: { data: WifiSample[] }) {
+export default function MapComponent({ data, showLegend = true }: { data: WifiSample[]; showLegend?: boolean }) {
   const mapRef = useRef<MapRef>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
   const [viewState, setViewState] = useState({
@@ -191,58 +191,62 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
     };
   }, [viewState, clusterVersion]);
 
-  const createLayers = (clusters: Cluster[]) => [
-    new ScatterplotLayer({
-      id: "clusters",
-      data: clusters,
-      getPosition: (d) => d.coordinates,
-      radiusUnits: "meters",
-      radiusMinPixels: 10,
-      radiusMaxPixels: 80,
-      getRadius: (d: Cluster) => {
-        if (d.data.length > 1) {
-          return Math.max(...d.data.map(getWifiRange));
-        }
-        return getWifiRange(d.data[0]);
-      },
-      getFillColor: (d: Cluster) => {
-        const freq: Record<number, number> = {};
-        for (const s of d.data)
-          freq[s.frequency_mhz] = (freq[s.frequency_mhz] ?? 0) + 1;
-        const dominant = Number(
-          Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0],
-        );
-        return getFreqColor(dominant);
-      },
-      stroked: true,
-      getLineColor: [255, 255, 255, 220],
-      lineWidthMinPixels: 1.5,
-      lineWidthMaxPixels: 2,
-      pickable: true,
-      onHover: (info: any) => {
-        if (info.object) console.log(info.object);
-      },
-      onClick: (info: any) => {
-        if (info.object) {
-          setSelectedCluster(info.object as Cluster);
-          setSelectedBssid(null);
-        }
-      },
-    }),
-    new TextLayer({
-      id: "labels",
-      data: clusters,
-      getPosition: (d) => [d.coordinates[0], d.coordinates[1], 0],
-      getText: (d: Cluster) => d.address || "",
-      getColor: [0, 0, 0, 220],
-      getSize: 11,
-      getTextAnchor: "middle",
-      getAlignmentBaseline: "center",
-      background: true,
-      getBackgroundColor: [255, 255, 255, 180],
-      backgroundPadding: [3, 2, 3, 2],
-    }),
-  ];
+  const createLayers = (clusters: Cluster[]) => {
+    const layers = [
+      new ScatterplotLayer({
+        id: "clusters",
+        data: clusters,
+        getPosition: (d) => d.coordinates,
+        radiusUnits: "meters",
+        radiusMinPixels: 10,
+        radiusMaxPixels: 80,
+        getRadius: (d: Cluster) => {
+          if (d.data.length > 1) {
+            return Math.max(...d.data.map(getWifiRange));
+          }
+          return getWifiRange(d.data[0]);
+        },
+        getFillColor: (d: Cluster) => {
+          const freq: Record<number, number> = {};
+          for (const s of d.data)
+            freq[s.frequency_mhz] = (freq[s.frequency_mhz] ?? 0) + 1;
+          const dominant = Number(
+            Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0],
+          );
+          return getFreqColor(dominant);
+        },
+        stroked: true,
+        getLineColor: [255, 255, 255, 220],
+        lineWidthMinPixels: 1.5,
+        lineWidthMaxPixels: 2,
+        pickable: true,
+        onHover: (info: any) => {
+          if (info.object) console.log(info.object);
+        },
+        onClick: (info: any) => {
+          if (info.object) {
+            setSelectedCluster(info.object as Cluster);
+            setSelectedBssid(null);
+          }
+        },
+      }),
+      new TextLayer({
+        id: "labels",
+        data: clusters,
+        getPosition: (d) => [d.coordinates[0], d.coordinates[1], 0],
+        getText: (d: Cluster) => d.address || "",
+        getColor: [0, 0, 0, 220],
+        getSize: 11,
+        getTextAnchor: "middle",
+        getAlignmentBaseline: "center",
+        background: true,
+        getBackgroundColor: [255, 255, 255, 180],
+        backgroundPadding: [3, 2, 3, 2],
+      }),
+    ];
+
+    return layers;
+  };
 
   // Push updated layers to the deck.gl overlay
   useEffect(() => {
@@ -259,7 +263,7 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
     : [];
 
   return (
-    <div className="relative w-screen h-screen">
+    <div className="relative w-full h-full">
       <MapGL
         ref={mapRef}
         initialViewState={viewState}
@@ -277,7 +281,7 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
         }}
       />
 
-      {/* frequency band filter legend */}
+      {showLegend && (
       <div className="absolute bottom-6 left-4 z-10 rounded-2xl border border-slate-200 bg-white/90 px-3 py-2.5 shadow-sm backdrop-blur-sm">
         <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-widest text-slate-400">
           Frequency band
@@ -304,6 +308,7 @@ export default function MapComponent({ data }: { data: WifiSample[] }) {
           })}
         </div>
       </div>
+      )}
 
       {selectedCluster && (
         <div className="absolute top-4 right-4 z-50 w-80">
