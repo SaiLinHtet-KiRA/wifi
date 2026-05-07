@@ -31,7 +31,17 @@ const header = parseCSVLine(lines[0]);
 const bssidIndex = header.indexOf('bssid');
 const gpsTextIndex = header.indexOf('gps_text');
 
-const outputLines = ['bssid,gps_text'];
+function parseGPS(gpsText) {
+  if (!gpsText) return { lat: '', lng: '' };
+  const latMatch = gpsText.match(/Lat:\s*([0-9.-]+)/);
+  const lngMatch = gpsText.match(/Lng:\s*([0-9.-]+)/);
+  return {
+    lat: latMatch ? latMatch[1] : '',
+    lng: lngMatch ? lngMatch[1] : ''
+  };
+}
+
+const outputLines = ['bssid,lat,lng'];
 
 for (let i = 1; i < lines.length; i++) {
   if (!lines[i].trim()) continue;
@@ -39,8 +49,9 @@ for (let i = 1; i < lines.length; i++) {
   const values = parseCSVLine(lines[i]);
   const bssid = values[bssidIndex] || '';
   const gpsText = values[gpsTextIndex] || '';
+  const { lat, lng } = parseGPS(gpsText);
   
-  outputLines.push(`${bssid},${gpsText}`);
+  outputLines.push(`${bssid},${lat},${lng}`);
 }
 
 fs.writeFileSync(outputPath, outputLines.join('\n'), 'utf8');
