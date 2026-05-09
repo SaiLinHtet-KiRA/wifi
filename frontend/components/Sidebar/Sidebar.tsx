@@ -7,6 +7,7 @@ const navItems = [
   { name: 'Dashboard', href: '/', icon: '📊' },
   { name: 'Map', href: '/map', icon: '🗺️' },
   { name: 'Navigate', href: '/navigate', icon: '🧭' },
+  { name: 'Range Navigate', href: '/range-navigate', icon: '📡' },
 ];
 
 export default function Sidebar() {

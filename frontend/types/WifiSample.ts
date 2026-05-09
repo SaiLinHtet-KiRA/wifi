@@ -1,7 +1,7 @@
 export type GPS = {
-  accuracy: number; // 4.9
-  lat: number;
-  lng: number;
+  accuracy: number | string | null;
+  lat: number | null;
+  lng: number | null;
 };
 
 export type WifiSample = {

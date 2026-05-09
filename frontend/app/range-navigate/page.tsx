@@ -7,23 +7,23 @@ import { WifiSample } from "@/types/WifiSample";
 
 type CsvRow = Record<string, any>;
 
-type NearestNeighbor = {
-  rank: number;
+type WifiPoint = {
   bssid: string;
   lat: number;
   lng: number;
-  distance: number;
+  distance_m: number;
   direction: string;
 };
 
-export default function NavigatePage() {
+export default function RangeNavigatePage() {
   const userLocation = { lat: 13.681453879054700, lng: 100.61025550930052 };
-  const [nearestNeighbors, setNearestNeighbors] = useState<NearestNeighbor[]>([]);
+  const [wifiPoints, setWifiPoints] = useState<WifiPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [csvData, setCsvData] = useState<CsvRow[]>([]);
   const [selectedPoint, setSelectedPoint] = useState<WifiSample[] | null>(null);
   const [selectedAddress, setSelectedAddress] = useState<string>('');
   const [focusedPoint, setFocusedPoint] = useState<{ lng: number; lat: number } | null>(null);
+  const [radius, setRadius] = useState(50);
 
   useEffect(() => {
     fetch('/api/wifi-data')
@@ -32,29 +32,29 @@ export default function NavigatePage() {
       .catch((err) => console.error('Error loading CSV data:', err));
   }, []);
 
-  const fetchNearest = async () => {
+  const fetchRange = async () => {
     setLoading(true);
     try {
       const response = await fetch(
-        `http://localhost:5000/api/predict?lat=${userLocation.lat}&lng=${userLocation.lng}`
+        `http://localhost:5000/api/range?lat=${userLocation.lat}&lng=${userLocation.lng}&radius=${radius}`
       );
       const data = await response.json();
-      if (data.nearest_neighbors) {
-        setNearestNeighbors(data.nearest_neighbors);
+      if (data.wifi_points) {
+        setWifiPoints(data.wifi_points);
       }
     } catch (error) {
-      console.error('Error fetching nearest neighbors:', error);
+      console.error('Error fetching wifi points:', error);
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchNearest();
-  }, []);
+    fetchRange();
+  }, [radius]);
 
-  const matchedPoints: WifiSample[] = nearestNeighbors
-    .map((nn) => {
-      const match = csvData.find((row) => row.bssid === nn.bssid);
+  const matchedPoints: WifiSample[] = wifiPoints
+    .map((wp) => {
+      const match = csvData.find((row) => row.bssid === wp.bssid);
       if (match) {
         return {
           bssid: match.bssid,
@@ -90,6 +90,15 @@ export default function NavigatePage() {
     }
   };
 
+  const nearestNeighbors = wifiPoints.map((wp, i) => ({
+    rank: i + 1,
+    bssid: wp.bssid,
+    lat: wp.lat,
+    lng: wp.lng,
+    distance: wp.distance_m / 1000,
+    direction: wp.direction,
+  }));
+
   return (
     <div className="h-full w-full relative">
       <NavigateMap 
@@ -97,43 +106,56 @@ export default function NavigatePage() {
         nearestNeighbors={nearestNeighbors}
         matchedPoints={matchedPoints}
         onPointClick={(bssid) => {
-          const point = nearestNeighbors.find(n => n.bssid === bssid);
+          const point = wifiPoints.find(p => p.bssid === bssid);
           handlePointClick(bssid, point?.lat, point?.lng);
         }}
         focusedPoint={focusedPoint}
-        showRangeCircle={false}
-        initialZoom={20}
+        showLines={false}
+        showRangeCircle={true}
+        radius={radius}
+        initialZoom={18}
       />
       <div className="absolute top-4 left-4 z-10 bg-white/95 backdrop-blur-sm p-4 rounded-2xl shadow-lg border border-slate-200 max-w-sm">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base font-semibold text-slate-900">Nearest WiFi Points</h2>
-          <button
-            onClick={fetchNearest}
-            disabled={loading}
-            className="text-xs bg-blue-500 text-white px-3 py-1.5 rounded-full hover:bg-blue-600 disabled:bg-gray-400 transition-colors"
-          >
-            {loading ? '...' : '↻'}
-          </button>
+          <h2 className="text-base font-semibold text-slate-900">WiFi in Range</h2>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              value={radius}
+              onChange={(e) => setRadius(Number(e.target.value))}
+              className="w-16 text-xs border border-slate-200 rounded px-2 py-1"
+              min={10}
+              max={500}
+            />
+            <span className="text-xs text-slate-500">m</span>
+            <button
+              onClick={fetchRange}
+              disabled={loading}
+              className="text-xs bg-blue-500 text-white px-3 py-1.5 rounded-full hover:bg-blue-600 disabled:bg-gray-400 transition-colors"
+            >
+              {loading ? '...' : '↻'}
+            </button>
+          </div>
         </div>
-        {nearestNeighbors.length > 0 && (
-          <div className="space-y-2">
-            {nearestNeighbors.map((point) => {
+        {wifiPoints.length > 0 && (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {wifiPoints.map((point, idx) => {
               const mp = matchedPoints.find(p => p.bssid === point.bssid);
               const bandColor = mp?.band === '2.4 GHz' ? 'bg-green-500' : mp?.band === '5 GHz' ? 'bg-yellow-500' : 'bg-red-500';
               return (
                 <button
-                  key={point.rank}
+                  key={idx}
                   onClick={() => handlePointClick(point.bssid, point.lat, point.lng)}
                   className="w-full text-left p-3 rounded-xl hover:bg-slate-50 border border-slate-100 transition-all hover:border-slate-300"
                 >
                   <div className="flex items-center gap-2 mb-1">
                     <span className={`w-2 h-2 rounded-full ${bandColor}`} />
-                    <span className="text-sm font-medium text-slate-900 truncate">#{point.rank} {mp?.ssid || point.bssid}</span>
+                    <span className="text-sm font-medium text-slate-900 truncate">#{idx + 1} {mp?.ssid || point.bssid}</span>
                   </div>
                   <p className="text-xs text-slate-500 truncate font-mono">{point.bssid}</p>
                   <div className="flex gap-3 mt-1.5 text-xs text-slate-600">
                     <span className="flex items-center gap-1">
-                      <span className="text-slate-400">dist:</span> {point.distance.toFixed(3)}
+                      <span className="text-slate-400">dist:</span> {point.distance_m}m
                     </span>
                     <span className="flex items-center gap-1">
                       <span className="text-slate-400">dir:</span> {point.direction}
@@ -145,6 +167,9 @@ export default function NavigatePage() {
             })}
           </div>
         )}
+        <div className="mt-2 text-xs text-slate-500 text-center">
+          Found {wifiPoints.length} WiFi points
+        </div>
       </div>
       {selectedPoint && selectedPoint.length > 0 && (
         <div className="absolute top-4 right-4 z-10 w-80">

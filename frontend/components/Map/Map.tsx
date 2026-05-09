@@ -128,14 +128,16 @@ export default function MapComponent({ data, showLegend = true }: { data: WifiSa
       return;
     }
     supercluster.load(
-      filteredData.map((p, id) => ({
-        type: "Feature" as const,
-        geometry: {
-          type: "Point" as const,
-          coordinates: [p.gps.lng, p.gps.lat],
-        },
-        properties: { id },
-      })),
+      filteredData
+        .filter((p) => p.gps.lng !== null && p.gps.lat !== null)
+        .map((p, id) => ({
+          type: "Feature" as const,
+          geometry: {
+            type: "Point" as const,
+            coordinates: [p.gps.lng as number, p.gps.lat as number],
+          },
+          properties: { id },
+        })),
     );
     setClusterVersion((v) => v + 1);
   }, [filteredData]);
